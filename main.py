@@ -1,38 +1,35 @@
 from src.models.network_state import NetworkState
+from src.parsers.nmap_parser import NmapParser
 
 
-def main():
-
+def main() -> None:
     state = NetworkState(
         target_ip="10.0.4.3",
         scope_networks=[
             "10.0.0.0/24",
             "10.0.2.0/24",
-            "10.0.4.0/24"
+            "10.0.4.0/24",
         ],
-        blocked_networks=["10.0.4.0/24"]
+        blocked_networks=["10.0.4.0/24"],
     )
 
-    # simulate discovering hosts
-    state.add_host("10.0.0.1")
-    state.add_host("10.0.2.2")
+    sample_nmap_output = """
+Nmap scan report for 10.0.0.1
+Host is up.
+Not shown: 999 closed ports
+PORT     STATE SERVICE
+2601/tcp open  ospfd
 
-    # simulate scan results
-    state.add_service("10.0.0.1", 2601, "tcp", "ospfd")
-    state.add_service("10.0.2.2", 8080, "tcp", "tomcat")
+Nmap scan report for 10.0.2.2
+Host is up.
+Not shown: 999 closed ports
+PORT     STATE SERVICE VERSION
+8080/tcp open  http-proxy Apache Tomcat 9.0
+"""
 
-    # mark special hosts
-    state.mark_gateway_candidate("10.0.0.1", "Routing service observed")
-    state.mark_pivot_candidate("10.0.2.2", "Possible pivot point")
+    parser = NmapParser()
+    parser.update_network_state(sample_nmap_output, state)
 
-    # record an action
-    state.record_action(
-        action_type="scan",
-        description="Initial network scan",
-        command="nmap 10.0.0.0/24"
-    )
-
-    # print summary
     print(state.to_prompt_context())
 
 
