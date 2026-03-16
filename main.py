@@ -1,35 +1,67 @@
-from src.models.network_state import NetworkState
-from src.parsers.nmap_parser import NmapParser
+from src.experiments.planner_evaluation import PlannerEvaluation
+from src.services.llm_client import LLMClient
+from src.services.planner import Planner
+from src.services.state_manager import StateManager
+
+
+def print_divider(title: str) -> None:
+    print("\n" + "=" * 60)
+    print(title)
+    print("=" * 60)
 
 
 def main() -> None:
-    state = NetworkState(
-        target_ip="10.0.4.3",
-        scope_networks=[
-            "10.0.0.0/24",
-            "10.0.2.0/24",
-            "10.0.4.0/24",
-        ],
-        blocked_networks=["10.0.4.0/24"],
+    evaluator = PlannerEvaluation(max_actions=3)
+    manager = StateManager()
+
+    # Start from an initial state so we can watch it evolve
+    state = evaluator.build_initial_recon_state()
+
+    # Heuristic planner option:
+    # planner = Planner(llm_callable=None, max_actions=3, use_mock_fallback=True, debug=False)
+
+    # LLM planner option:
+    client = LLMClient(
+        base_url="http://localhost:11434",
+        model="phi3",
+        timeout=180,
+    )
+    planner = Planner(
+        llm_callable=client.generate,
+        max_actions=3,
+        use_mock_fallback=True,
+        debug=False,
     )
 
-    sample_nmap_output = """
-Nmap scan report for 10.0.0.1
-Host is up.
-Not shown: 999 closed ports
-PORT     STATE SERVICE
-2601/tcp open  ospfd
+    print_divider("INITIAL STATE")
+    print(state.to_prompt_context())
 
-Nmap scan report for 10.0.2.2
-Host is up.
-Not shown: 999 closed ports
-PORT     STATE SERVICE VERSION
-8080/tcp open  http-proxy Apache Tomcat 9.0
-"""
+    for step in range(1, 6):
+        print_divider(f"STEP {step}: PLANNER OUTPUT")
 
-    parser = NmapParser()
-    parser.update_network_state(sample_nmap_output, state)
+        actions = planner.plan(state)
 
+        if not actions:
+            print("Planner returned no actions. Stopping.")
+            break
+
+        for action in actions:
+            print(action)
+
+        chosen_action = actions[0]
+
+        print_divider(f"STEP {step}: APPLYING TOP ACTION")
+        print(chosen_action)
+
+        result = manager.apply_action(state, chosen_action)
+
+        print("\nAction Result:")
+        print(result)
+
+        print_divider(f"STEP {step}: UPDATED STATE")
+        print(state.to_prompt_context())
+
+    print_divider("FINAL STATE")
     print(state.to_prompt_context())
 
 

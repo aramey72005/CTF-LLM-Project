@@ -1,0 +1,104 @@
+{
+  "heuristic": {
+    "planner_name": "heuristic",
+    "parsed_successfully": true,
+    "total_actions": 3,
+    "in_scope_targets": 3,
+    "known_targets": 3,
+    "commands_present": 2,
+    "plausible_commands": 3,
+    "average_specificity": 3.6666666666666665,
+    "actions": [
+      {
+        "rank": 1,
+        "action_type": "enumerate",
+        "target_host": "10.0.2.2",
+        "command": "nmap -sV -p 8080 10.0.2.2",
+        "reasoning": "A web-facing service is present and should be enumerated further before exploitation.",
+        "confidence": 0.9,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": true,
+        "command_plausible": true,
+        "specificity_score": 4
+      },
+      {
+        "rank": 2,
+        "action_type": "analyze",
+        "target_host": "10.0.2.2",
+        "command": "searchsploit tomcat",
+        "reasoning": "The service appears to be Apache Tomcat and should be analyzed for known weaknesses.",
+        "confidence": 0.82,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": true,
+        "command_plausible": true,
+        "specificity_score": 4
+      },
+      {
+        "rank": 3,
+        "action_type": "analyze",
+        "target_host": "10.0.0.1",
+        "command": null,
+        "reasoning": "A routing-related host exists and may be strategically important for reaching blocked networks.",
+        "confidence": 0.78,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": false,
+        "command_plausible": true,
+        "specificity_score": 3
+      }
+    ]
+  },
+  "llm": {
+    "planner_name": "llm",
+    "parsed_successfully": true,
+    "total_actions": 3,
+    "in_scope_targets": 3,
+    "known_targets": 3,
+    "commands_present": 3,
+    "plausible_commands": 3,
+    "average_specificity": 4.0,
+    "actions": [
+      {
+        "rank": 1,
+        "action_type": "enumerate",
+        "target_host": "10.0.2.2",
+        "command": "nmap -sV -p 8080 --script http-enum 10.0.2.2",
+        "reasoning": "Enumerate the exposed Tomcat service and content on port 8080.",
+        "confidence": 0.95,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": true,
+        "command_plausible": true,
+        "specificity_score": 4
+      },
+      {
+        "rank": 2,
+        "action_type": "enumerate",
+        "target_host": "10.0.2.2",
+        "command": "nmap -sV -p 8080 10.0.2.2",
+        "reasoning": "A web-facing service is present and should be enumerated further before exploitation.",
+        "confidence": 0.9,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": true,
+        "command_plausible": true,
+        "specificity_score": 4
+      },
+      {
+        "rank": 3,
+        "action_type": "analyze",
+        "target_host": "10.0.2.2",
+        "command": "searchsploit tomcat",
+        "reasoning": "The service appears to be Apache Tomcat and should be analyzed for known weaknesses.",
+        "confidence": 0.82,
+        "target_in_scope": true,
+        "target_known": true,
+        "command_present": true,
+        "command_plausible": true,
+        "specificity_score": 4
+      }
+    ]
+  }
+}

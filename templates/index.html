@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CTF LLM Planner</title>
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:        #0a0e14;
+            --surface:   #0f1620;
+            --surface2:  #151e2b;
+            --border:    #1e3048;
+            --accent:    #00d4ff;
+            --accent2:   #00ff9d;
+            --warn:      #ffb300;
+            --danger:    #ff4560;
+            --muted:     #4a6080;
+            --text:      #c8d8e8;
+            --text-dim:  #6080a0;
+            --mono:      'Share Tech Mono', monospace;
+            --sans:      'Rajdhani', sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--sans);
+            font-size: 15px;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Scanline overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0,0,0,0.08) 2px,
+                rgba(0,0,0,0.08) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* ── Header ── */
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .logo {
+            font-family: var(--mono);
+            font-size: 20px;
+            color: var(--accent);
+            letter-spacing: 2px;
+            text-shadow: 0 0 12px rgba(0,212,255,0.5);
+            white-space: nowrap;
+        }
+
+        .logo span { color: var(--accent2); }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 13px;
+            font-family: var(--mono);
+        }
+
+        /* ── Controls bar ── */
+        .controls {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .ctrl-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .ctrl-group label {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        select {
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-family: var(--mono);
+            font-size: 13px;
+            outline: none;
+            cursor: pointer;
+            transition: border-color .2s;
+        }
+
+        select:focus { border-color: var(--accent); }
+
+        .toggle-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .toggle {
+            position: relative;
+            width: 38px;
+            height: 20px;
+        }
+
+        .toggle input { opacity: 0; width: 0; height: 0; }
+
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: .2s;
+        }
+
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            width: 14px; height: 14px;
+            left: 2px; top: 2px;
+            background: var(--muted);
+            border-radius: 50%;
+            transition: .2s;
+        }
+
+        .toggle input:checked + .toggle-slider { background: rgba(0,212,255,0.15); border-color: var(--accent); }
+        .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--accent); }
+
+        .btn {
+            font-family: var(--mono);
+            font-size: 13px;
+            padding: 7px 18px;
+            border-radius: 4px;
+            border: 1px solid;
+            cursor: pointer;
+            letter-spacing: 1px;
+            transition: all .15s;
+            text-transform: uppercase;
+        }
+
+        .btn-primary {
+            background: rgba(0,212,255,0.08);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .btn-primary:hover { background: rgba(0,212,255,0.18); box-shadow: 0 0 12px rgba(0,212,255,0.3); }
+        .btn-primary:disabled { opacity: .35; cursor: not-allowed; }
+
+        .btn-success {
+            background: rgba(0,255,157,0.08);
+            border-color: var(--accent2);
+            color: var(--accent2);
+        }
+        .btn-success:hover { background: rgba(0,255,157,0.18); }
+        .btn-success:disabled { opacity: .35; cursor: not-allowed; }
+
+        .btn-ghost {
+            background: transparent;
+            border-color: var(--border);
+            color: var(--text-dim);
+        }
+        .btn-ghost:hover { border-color: var(--muted); color: var(--text); }
+
+        /* ── Step progress bar ── */
+        .progress-bar {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .step-dots {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .step-dot {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            transition: all .3s;
+            background: var(--surface2);
+        }
+
+        .step-dot.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            box-shadow: 0 0 8px rgba(0,212,255,0.4);
+        }
+
+        .step-dot.done {
+            background: rgba(0,255,157,0.12);
+            border-color: var(--accent2);
+            color: var(--accent2);
+        }
+
+        .step-connector {
+            width: 24px; height: 1px;
+            background: var(--border);
+            transition: background .3s;
+        }
+
+        .step-connector.done { background: var(--accent2); }
+
+        .progress-label {
+            margin-left: auto;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .progress-label span { color: var(--accent); }
+
+        /* ── Main layout ── */
+        .layout {
+            display: grid;
+            grid-template-columns: 340px 1fr 340px;
+            grid-template-rows: auto 1fr;
+            gap: 0;
+            height: calc(100vh - 140px);
+            min-height: 600px;
+        }
+
+        .panel {
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel:last-child { border-right: none; }
+
+        .panel-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .panel-title {
+            font-family: var(--mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-dim);
+        }
+
+        .panel-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 6px var(--accent);
+            flex-shrink: 0;
+        }
+
+        .panel-dot.green { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+        .panel-dot.yellow { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        /* ── State text panel ── */
+        .state-pre {
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.7;
+            background: transparent;
+        }
+
+        .state-pre .hl-ip    { color: var(--accent); }
+        .state-pre .hl-label { color: var(--warn); }
+        .state-pre .hl-comp  { color: var(--danger); }
+        .state-pre .hl-svc   { color: var(--accent2); }
+
+        /* ── Graph panel ── */
+        .graph-center {
+            grid-column: 2;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        #cy {
+            flex: 1;
+            background: var(--bg);
+        }
+
+        .graph-legend {
+            padding: 10px 16px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            background: var(--surface);
+            flex-shrink: 0;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .legend-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* ── Action cards ── */
+        .action-card {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all .2s;
+            position: relative;
+        }
+
+        .action-card:hover {
+            border-color: var(--accent);
+            background: rgba(0,212,255,0.04);
+        }
+
+        .action-card.selected {
+            border-color: var(--accent2);
+            background: rgba(0,255,157,0.06);
+            box-shadow: 0 0 12px rgba(0,255,157,0.15);
+        }
+
+        .action-card.applied {
+            border-color: var(--muted);
+            opacity: 0.6;
+            cursor: default;
+        }
+
+        .action-meta {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            font-family: var(--mono);
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 3px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border: 1px solid;
+        }
+
+        .badge-scan     { color: var(--accent);  border-color: var(--accent);  background: rgba(0,212,255,0.08); }
+        .badge-enumerate{ color: #a78bfa;         border-color: #a78bfa;        background: rgba(167,139,250,0.08); }
+        .badge-exploit  { color: var(--danger);   border-color: var(--danger);  background: rgba(255,69,96,0.08); }
+        .badge-pivot    { color: var(--warn);     border-color: var(--warn);    background: rgba(255,179,0,0.08); }
+        .badge-analyze  { color: var(--accent2);  border-color: var(--accent2); background: rgba(0,255,157,0.08); }
+        .badge-access   { color: #f472b6;         border-color: #f472b6;        background: rgba(244,114,182,0.08); }
+
+        .confidence-bar {
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            margin: 6px 0;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: linear-gradient(90deg, var(--accent2), var(--accent));
+            transition: width .5s ease;
+        }
+
+        .action-field {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            margin: 3px 0;
+            display: flex;
+            gap: 6px;
+        }
+
+        .action-field .k { color: var(--muted); min-width: 70px; flex-shrink: 0; }
+        .action-field .v { color: var(--text); word-break: break-all; }
+        .action-field .v.cmd { color: var(--accent2); }
+        .action-field .v.ip  { color: var(--accent); }
+
+        .action-rank {
+            position: absolute;
+            top: 10px; right: 12px;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        /* ── Result box ── */
+        .result-box {
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            border: 1px solid;
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+
+        .result-box.success {
+            background: rgba(0,255,157,0.05);
+            border-color: var(--accent2);
+            color: var(--accent2);
+        }
+
+        .result-box.fail {
+            background: rgba(255,69,96,0.05);
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .result-summary { margin-bottom: 6px; font-size: 13px; }
+
+        .result-changes { color: var(--text); margin-top: 6px; }
+        .result-changes li { margin: 3px 0 3px 14px; }
+
+        /* ── Timeline sidebar ── */
+        .timeline-entry {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background .15s;
+        }
+
+        .timeline-entry:hover { background: rgba(255,255,255,0.02); }
+        .timeline-entry:last-child { border-bottom: none; }
+
+        .tl-label {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .tl-label .tl-step { color: var(--accent); }
+        .tl-chosen { font-size: 12px; color: var(--text); }
+        .tl-result { font-size: 11px; font-family: var(--mono); margin-top: 3px; }
+        .tl-result.ok  { color: var(--accent2); }
+        .tl-result.bad { color: var(--danger); }
+
+        /* ── Empty / loading states ── */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 12px;
+            color: var(--text-dim);
+            font-family: var(--mono);
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .empty-icon {
+            font-size: 36px;
+            opacity: .3;
+        }
+
+        .spinner {
+            width: 28px; height: 28px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Notification toast ── */
+        #toast {
+            position: fixed;
+            bottom: 24px; right: 24px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px 18px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text);
+            z-index: 10000;
+            transform: translateY(80px);
+            opacity: 0;
+            transition: all .3s;
+            max-width: 320px;
+        }
+
+        #toast.show { transform: translateY(0); opacity: 1; }
+        #toast.success { border-color: var(--accent2); color: var(--accent2); }
+        #toast.error   { border-color: var(--danger);  color: var(--danger); }
+
+        /* ── Done overlay ── */
+        .done-banner {
+            background: rgba(0,255,157,0.06);
+            border: 1px solid var(--accent2);
+            border-radius: 6px;
+            padding: 14px;
+            text-align: center;
+            font-family: var(--mono);
+            color: var(--accent2);
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+
+        /* scrollbar styling */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        @media (max-width: 1100px) {
+            .layout { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; height: auto; }
+            .graph-center { grid-column: 1 / -1; height: 400px; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="logo">CTF<span>//</span>LLM</div>
+    <p>// state-aware cyber planning simulation</p>
+</header>
+
+<div class="controls">
+    <div class="ctrl-group">
+        <label>SCENARIO</label>
+        <select id="sel-scenario">
+            <option value="initial_recon">Initial Recon</option>
+            <option value="tomcat_foothold" selected>Tomcat Foothold</option>
+            <option value="compromised_pivot">Compromised Pivot</option>
+        </select>
+    </div>
+    <div class="ctrl-group">
+        <label>MODE</label>
+        <select id="sel-mode">
+            <option value="heuristic">Heuristic (oracle)</option>
+            <option value="llm">LLM + Structured State</option>
+            <option value="llm_nostate">LLM + Conversational State</option>
+        </select>
+    </div>
+    <button class="btn btn-primary" id="btn-start">▶ START SIM</button>
+    <button class="btn btn-ghost" id="btn-reset" disabled>↺ RESET</button>
+
+    <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-success" id="btn-advance" disabled>APPLY &amp; NEXT STEP →</button>
+    </div>
+</div>
+
+<div class="progress-bar" id="progress-bar" style="display:none;">
+    <div class="step-dots" id="step-dots"></div>
+    <div class="progress-label">step <span id="prog-current">0</span> / <span id="prog-max">6</span></div>
+</div>
+
+<div class="layout">
+    <!-- LEFT: state text -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-dot"></div>
+            <span class="panel-title">Network State</span>
+        </div>
+        <div class="panel-body" id="state-body">
+            <div class="empty-state">
+                <div class="empty-icon">⬡</div>
+                <div>Start a simulation to<br>view network state</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CENTER: graph -->
+    <div class="graph-center">
+        <div class="panel-header">
+            <div class="panel-dot green"></div>
+            <span class="panel-title">Topology</span>
+        </div>
+        <div id="cy"></div>
+        <div class="graph-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#4a9eff"></div>Normal</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ffd166"></div>Gateway</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>Pivot</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ff4560"></div>Compromised</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#00ff9d"></div>Target</div>
+        </div>
+    </div>
+
+    <!-- RIGHT TOP: AI recommendations -->
+    <div class="panel" style="grid-row: 1 / 3; border-left: 1px solid var(--border);">
+        <div class="panel-header">
+            <div class="panel-dot yellow"></div>
+            <span class="panel-title">AI Recommendations</span>
+            <span id="mode-indicator" style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-dim);border:1px solid var(--border);border-radius:3px;padding:2px 7px">IDLE</span>
+        </div>
+        <div class="panel-body" id="actions-body">
+            <div class="empty-state">
+                <div class="empty-icon">◈</div>
+                <div>Awaiting simulation start</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BOTTOM LEFT: result + timeline -->
+    <div class="panel" style="border-top: 1px solid var(--border);">
+        <div class="panel-header">
+            <div class="panel-dot"></div>
+            <span class="panel-title">Step Result</span>
+        </div>
+        <div class="panel-body" id="result-body">
+            <div class="empty-state">
+                <div class="empty-icon">▷</div>
+                <div>No step applied yet</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BOTTOM CENTER: timeline -->
+    <div class="graph-center" style="height: auto; border-top: 1px solid var(--border); height: 220px;">
+        <div class="panel-header">
+            <div class="panel-dot green"></div>
+            <span class="panel-title">Step Timeline</span>
+        </div>
+        <div class="panel-body" id="timeline-body">
+            <div class="empty-state" style="height:120px;">
+                <div style="font-family:var(--mono); font-size:12px; color:var(--text-dim)">No steps taken yet</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────
+let simState = {
+    running: false,
+    step: 0,
+    maxSteps: 6,
+    done: false,
+    selectedAction: null,
+    currentActions: [],
+    mode: 'heuristic',
+    cy: null,
+};
+
+// ── Cytoscape init ───────────────────────────────────────
+function initCy() {
+    simState.cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: [],
+        style: [
+            {
+                selector: 'node',
+                style: {
+                    'label': 'data(label)',
+                    'text-wrap': 'wrap',
+                    'text-max-width': '110px',
+                    'text-valign': 'center',
+                    'text-halign': 'center',
+                    'width': 80, 'height': 80,
+                    'font-size': 10,
+                    'font-family': 'Share Tech Mono, monospace',
+                    'color': '#c8d8e8',
+                    'border-width': 2,
+                    'border-color': '#1e3048',
+                    'background-color': '#151e2b',
+                    'transition-property': 'background-color, border-color, width, height',
+                    'transition-duration': '0.4s',
+                }
+            },
+            { selector: 'node[role="gateway"]',    style: { 'background-color': '#2a2000', 'border-color': '#ffd166', 'color': '#ffd166' } },
+            { selector: 'node[role="pivot"]',      style: { 'background-color': '#1a1040', 'border-color': '#a78bfa', 'color': '#a78bfa' } },
+            { selector: 'node[role="compromised"]',style: { 'background-color': '#2a0010', 'border-color': '#ff4560', 'color': '#ff4560' } },
+            { selector: 'node[role="target"]',     style: { 'background-color': '#001a10', 'border-color': '#00ff9d', 'color': '#00ff9d' } },
+            { selector: 'node[role="normal"]',     style: { 'background-color': '#0a1825', 'border-color': '#4a9eff', 'color': '#4a9eff' } },
+            {
+                selector: 'edge',
+                style: {
+                    'curve-style': 'bezier',
+                    'target-arrow-shape': 'triangle',
+                    'label': 'data(label)',
+                    'font-size': 10,
+                    'font-family': 'Share Tech Mono, monospace',
+                    'color': '#4a6080',
+                    'text-background-color': '#0a0e14',
+                    'text-background-opacity': 1,
+                    'text-background-padding': '2px',
+                    'line-color': '#1e3048',
+                    'target-arrow-color': '#1e3048',
+                    'width': 1.5,
+                }
+            },
+            {
+                selector: 'edge[label="pivot path"]',
+                style: {
+                    'line-color': '#00ff9d',
+                    'target-arrow-color': '#00ff9d',
+                    'line-style': 'dashed',
+                    'color': '#00ff9d',
+                    'width': 2,
+                }
+            },
+            {
+                selector: 'edge[label="blocked"]',
+                style: {
+                    'line-color': '#ff4560',
+                    'target-arrow-color': '#ff4560',
+                    'line-style': 'dotted',
+                    'color': '#ff4560',
+                }
+            },
+        ],
+        layout: { name: 'preset' },
+    });
+}
+
+function updateGraph(graphData) {
+    const cy = simState.cy;
+
+    // Fixed positions for known IPs — others get auto-placed
+    const positions = {
+        '10.0.0.1': { x: 180, y: 100 },
+        '10.0.2.2': { x: 420, y: 220 },
+        '10.0.4.3': { x: 660, y: 340 },
+    };
+
+    // Wipe and rebuild entirely each time.
+    // Incremental updates with CSS.escape on IPs cause Cytoscape selector
+    // failures that silently leave all nodes showing stale data.
+    cy.elements().remove();
+
+    graphData.nodes.forEach((n, i) => {
+        const pos = positions[n.id] || { x: 180 + (i * 220), y: 180 };
+        cy.add({
+            group: 'nodes',
+            data: { id: n.id, label: n.label, role: n.role },
+            position: pos
+        });
+    });
+
+    graphData.edges.forEach(e => {
+        cy.add({
+            group: 'edges',
+            data: {
+                id: `edge-${e.source}-${e.target}`,
+                source: e.source,
+                target: e.target,
+                label: e.label
+            }
+        });
+    });
+}
+
+// ── Render helpers ───────────────────────────────────────
+function badgeClass(type) {
+    const map = { scan: 'badge-scan', enumerate: 'badge-enumerate', exploit: 'badge-exploit',
+                  pivot: 'badge-pivot', analyze: 'badge-analyze', access: 'badge-access' };
+    return map[type] || 'badge-scan';
+}
+
+function renderActions(actions) {
+    const body = document.getElementById('actions-body');
+    if (!actions || actions.length === 0) {
+        body.innerHTML = '<div class="empty-state"><div class="empty-icon">◈</div><div>No actions available</div></div>';
+        return;
+    }
+
+    simState.currentActions = actions;
+    simState.selectedAction = null;
+
+    body.innerHTML = '';
+
+    if (simState.done) {
+        body.innerHTML = '<div class="done-banner">✓ SIMULATION COMPLETE<br><small>All steps exhausted</small></div>';
+        document.getElementById('btn-advance').disabled = true;
+        return;
+    }
+
+    actions.forEach((action, idx) => {
+        const card = document.createElement('div');
+        card.className = 'action-card';
+        card.dataset.idx = idx;
+
+        const pct = Math.round(action.confidence * 100);
+
+        const modeBadgeMap = {
+            heuristic:   '<span class="badge" style="color:#4a9eff;border-color:#4a9eff;background:rgba(74,158,255,0.08)">HEURISTIC</span>',
+            llm:         '<span class="badge" style="color:#a78bfa;border-color:#a78bfa;background:rgba(167,139,250,0.08)">LLM</span>',
+            llm_nostate: '<span class="badge" style="color:#ffb300;border-color:#ffb300;background:rgba(255,179,0,0.08)">LLM NO-STATE</span>',
+        };
+        const modeBadge = modeBadgeMap[simState.mode] || modeBadgeMap.heuristic;
+
+        card.innerHTML = `
+            <div class="action-rank">#${action.rank}</div>
+            <div class="action-meta">
+                <span class="badge ${badgeClass(action.action_type)}">${action.action_type}</span>
+                ${modeBadge}
+            </div>
+            <div class="confidence-bar"><div class="confidence-fill" style="width:${pct}%"></div></div>
+            <div class="action-field"><span class="k">target</span><span class="v ip">${action.target_host || 'N/A'}</span></div>
+            <div class="action-field"><span class="k">command</span><span class="v cmd">${action.command || '—'}</span></div>
+            <div class="action-field" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+                <span class="k">reasoning</span>
+                <span class="v" style="color:var(--text);font-style:italic">${action.reasoning}</span>
+            </div>
+            <div class="action-field"><span class="k">confidence</span><span class="v">${pct}%</span></div>
+        `;
+
+        card.addEventListener('click', () => selectAction(idx));
+        body.appendChild(card);
+    });
+
+    // Auto-select top action
+    selectAction(0);
+}
+
+function selectAction(idx) {
+    simState.selectedAction = idx;
+    document.querySelectorAll('.action-card').forEach((c, i) => {
+        c.classList.toggle('selected', i === idx);
+    });
+    document.getElementById('btn-advance').disabled = false;
+}
+
+function renderStateText(text) {
+    const body = document.getElementById('state-body');
+    // Colour-highlight IPs, labels and services
+    const highlighted = text
+        .replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d+)?)/g, '<span class="hl-ip">$1</span>')
+        .replace(/\[(compromised[^\]]*)\]/g, '<span class="hl-comp">[$1]</span>')
+        .replace(/\[(gateway[^\]]*|pivot[^\]]*|target[^\]]*)\]/g, '<span class="hl-label">[$1]</span>')
+        .replace(/(port|service|product|version)=(\S+)/g, '$1=<span class="hl-svc">$2</span>');
+    body.innerHTML = `<pre class="state-pre">${highlighted}</pre>`;
+}
+
+function renderResult(result, chosenAction) {
+    const body = document.getElementById('result-body');
+    if (!result || !chosenAction) {
+        body.innerHTML = '<div class="empty-state"><div class="empty-icon">▷</div><div>No step applied yet</div></div>';
+        return;
+    }
+
+    const cls = result.success ? 'success' : 'fail';
+    const icon = result.success ? '✓' : '✗';
+    const changes = (result.changes || []).map(c => `<li>${c}</li>`).join('');
+
+    body.innerHTML = `
+        <div class="result-box ${cls}">
+            <div class="result-summary">${icon} ${result.summary}</div>
+            ${changes ? `<ul class="result-changes">${changes}</ul>` : ''}
+        </div>
+        <div style="font-family:var(--mono); font-size:11px; color:var(--text-dim); margin-top:6px;">
+            <div class="action-field"><span class="k">action</span><span class="v">${chosenAction.action_type}</span></div>
+            <div class="action-field"><span class="k">target</span><span class="v ip">${chosenAction.target_host || 'N/A'}</span></div>
+            <div class="action-field"><span class="k">command</span><span class="v cmd">${chosenAction.command || '—'}</span></div>
+        </div>
+    `;
+}
+
+function appendTimeline(entry) {
+    const body = document.getElementById('timeline-body');
+    // Remove empty state
+    const empty = body.querySelector('.empty-state');
+    if (empty) empty.remove();
+
+    const el = document.createElement('div');
+    el.className = 'timeline-entry';
+
+    const resultCls = entry.result ? (entry.result.success ? 'ok' : 'bad') : '';
+    const resultTxt = entry.result ? (entry.result.success ? '✓ ' + entry.result.summary : '✗ ' + entry.result.summary) : '';
+    const chosenTxt = entry.chosen_action
+        ? `${entry.chosen_action.action_type} → ${entry.chosen_action.target_host || 'network'}`
+        : 'Initial State';
+
+    const reasoning = entry.chosen_action?.reasoning || '';
+    const modeTag = entry.mode !== 'heuristic'
+        ? '<span style="font-family:var(--mono);font-size:10px;color:#a78bfa;border:1px solid #a78bfa;border-radius:3px;padding:1px 5px;margin-left:6px">LLM</span>'
+        : '<span style="font-family:var(--mono);font-size:10px;color:#4a9eff;border:1px solid #4a9eff;border-radius:3px;padding:1px 5px;margin-left:6px">HEURISTIC</span>';
+
+    // Build score comparison block for LLM steps
+    let scoreHtml = '';
+    if (entry.score) {
+        const s = entry.score;
+        const matchColor = s.matched ? 'var(--accent2)' : 'var(--warn)';
+        const matchIcon = s.matched ? '✓ matched heuristic' : '≠ diverged from heuristic';
+        const hAction = s.heuristic_action || '—';
+        const hTarget = s.heuristic_target || 'network';
+        scoreHtml = `
+            <div style="margin-top:6px;padding:6px 8px;border:1px solid ${matchColor};border-radius:4px;background:rgba(0,0,0,0.2)">
+                <div style="font-family:var(--mono);font-size:10px;color:${matchColor};margin-bottom:4px">${matchIcon}</div>
+                <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">
+                    heuristic would: <span style="color:var(--text)">${hAction} → ${hTarget}</span>
+                </div>
+            </div>`;
+    }
+
+    el.innerHTML = `
+        <div class="tl-label"><span class="tl-step">STEP ${entry.step}</span>${entry.step > 0 ? modeTag : ''}</div>
+        <div class="tl-chosen">${chosenTxt}</div>
+        ${reasoning ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:3px;font-style:italic">${reasoning}</div>` : ''}
+        ${resultTxt ? `<div class="tl-result ${resultCls}">${resultTxt}</div>` : ''}
+        ${scoreHtml}
+    `;
+    body.prepend(el);
+}
+
+function updateProgress(step, maxSteps) {
+    document.getElementById('progress-bar').style.display = 'flex';
+    document.getElementById('prog-current').textContent = step;
+    document.getElementById('prog-max').textContent = maxSteps;
+
+    const dotsEl = document.getElementById('step-dots');
+    dotsEl.innerHTML = '';
+
+    for (let i = 0; i <= maxSteps; i++) {
+        if (i > 0) {
+            const conn = document.createElement('div');
+            conn.className = 'step-connector' + (i <= step ? ' done' : '');
+            dotsEl.appendChild(conn);
+        }
+        const dot = document.createElement('div');
+        dot.className = 'step-dot';
+        if (i < step) dot.classList.add('done');
+        else if (i === step) dot.classList.add('active');
+        dot.textContent = i;
+        dotsEl.appendChild(dot);
+    }
+}
+
+function showToast(msg, type = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'show ' + type;
+    setTimeout(() => { t.className = ''; }, 3000);
+}
+
+// ── API calls ────────────────────────────────────────────
+async function startSim() {
+    const scenario = document.getElementById('sel-scenario').value;
+    const mode = document.getElementById('sel-mode').value;
+
+    setLoading(true);
+
+    try {
+        const res = await fetch('/api/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scenario, mode }),
+        });
+        const data = await res.json();
+
+        simState.running = true;
+        simState.step = 0;
+        simState.done = false;
+        simState.mode = mode;
+        simState.maxSteps = data.max_steps;
+
+        renderStateText(data.state_text);
+        updateGraph(data.graph);
+        renderActions(data.actions);
+        renderResult(null, null);
+
+        // Clear timeline
+        document.getElementById('timeline-body').innerHTML = '';
+        appendTimeline({ step: 0, chosen_action: null, result: null });
+
+        updateProgress(0, data.max_steps);
+
+        document.getElementById('btn-reset').disabled = false;
+        document.getElementById('btn-start').textContent = '▶ RESTART';
+
+        // Update mode indicator in panel header
+        const modeEl = document.getElementById('mode-indicator');
+        if (modeEl) {
+            const modeLabels = { heuristic: 'HEURISTIC', llm: 'LLM + STRUCTURED STATE', llm_nostate: 'LLM + CONV. STATE' };
+            const modeColors = { heuristic: '#4a9eff', llm: '#a78bfa', llm_nostate: '#ffb300' };
+            modeEl.textContent = modeLabels[mode] || mode;
+            modeEl.style.color = modeColors[mode] || '#4a9eff';
+            modeEl.style.borderColor = modeColors[mode] || '#4a9eff';
+        }
+
+        showToast('Simulation started', 'success');
+
+    } catch(e) {
+        showToast('Failed to start: ' + e.message, 'error');
+    } finally {
+        setLoading(false);
+    }
+}
+
+async function advanceStep() {
+    if (!simState.running || simState.done) return;
+
+    const idx = simState.selectedAction;
+    const action = (idx !== null && simState.currentActions[idx]) ? simState.currentActions[idx] : null;
+
+    // Mark chosen card
+    document.querySelectorAll('.action-card').forEach((c, i) => {
+        if (i === idx) c.classList.add('applied');
+    });
+    document.getElementById('btn-advance').disabled = true;
+
+    setLoading(true);
+
+    // LLM can take 30-120s — use AbortController with a generous timeout
+    const controller = new AbortController();
+    const fetchTimeout = setTimeout(() => controller.abort(), 240000); // 4 min
+
+    try {
+        const res = await fetch('/api/advance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+            signal: controller.signal,
+        });
+        clearTimeout(fetchTimeout);
+        const data = await res.json();
+
+        if (data.error) { showToast(data.error, 'error'); return; }
+
+        simState.step = data.step;
+        simState.done = data.done;
+
+        renderStateText(data.state_text);
+        updateGraph(data.graph);
+        renderResult(data.action_result, data.chosen_action);
+        renderActions(data.actions);
+
+        appendTimeline({
+            step: data.step,
+            chosen_action: data.chosen_action,
+            result: data.action_result,
+            mode: simState.mode !== "heuristic" ? 'llm' : 'heuristic',
+            score: data.score || null,
+        });
+
+        updateProgress(data.step, data.max_steps);
+
+        if (data.done) {
+            showToast('Simulation complete!', 'success');
+            document.getElementById('btn-advance').disabled = true;
+        } else {
+            showToast(`Step ${data.step} applied`, 'success');
+        }
+
+    } catch(e) {
+        clearTimeout(fetchTimeout);
+        if (e.name === 'AbortError') {
+            showToast('LLM timed out after 4 minutes — try heuristic mode or check Ollama is running', 'error');
+        } else {
+            showToast('Step failed: ' + e.message, 'error');
+        }
+        document.getElementById('btn-advance').disabled = false;
+    } finally {
+        setLoading(false);
+    }
+}
+
+function resetSim() {
+    simState.running = false;
+    simState.step = 0;
+    simState.done = false;
+    simState.selectedAction = null;
+    simState.currentActions = [];
+
+    simState.cy.elements().remove();
+
+    document.getElementById('state-body').innerHTML = '<div class="empty-state"><div class="empty-icon">⬡</div><div>Start a simulation to view network state</div></div>';
+    document.getElementById('actions-body').innerHTML = '<div class="empty-state"><div class="empty-icon">◈</div><div>Awaiting simulation start</div></div>';
+    document.getElementById('result-body').innerHTML = '<div class="empty-state"><div class="empty-icon">▷</div><div>No step applied yet</div></div>';
+    document.getElementById('timeline-body').innerHTML = '<div class="empty-state" style="height:120px;"><div style="font-family:var(--mono); font-size:12px; color:var(--text-dim)">No steps taken yet</div></div>';
+    document.getElementById('progress-bar').style.display = 'none';
+
+    document.getElementById('btn-advance').disabled = true;
+    document.getElementById('btn-reset').disabled = true;
+    document.getElementById('btn-start').textContent = '▶ START SIM';
+}
+
+let _loadingTimer = null;
+let _loadingSeconds = 0;
+
+function setLoading(on) {
+    document.getElementById('btn-start').disabled = on;
+    document.getElementById('btn-advance').disabled = on;
+
+    if (on) {
+        _loadingSeconds = 0;
+        const isLlm = simState.mode !== 'heuristic';
+        const msg = isLlm
+            ? 'Waiting for LLM response...<br><small style="opacity:0.6">phi3 may take 30-120s</small>'
+            : 'Processing...';
+
+        document.getElementById('actions-body').innerHTML = `
+            <div class="empty-state">
+                <div class="spinner"></div>
+                <div style="margin-top:10px;text-align:center">${msg}</div>
+                ${isLlm ? '<div id="llm-timer" style="font-family:var(--mono);font-size:13px;color:var(--accent);margin-top:8px">0s</div>' : ''}
+            </div>`;
+
+        if (isLlm) {
+            _loadingTimer = setInterval(() => {
+                _loadingSeconds++;
+                const el = document.getElementById('llm-timer');
+                if (el) el.textContent = _loadingSeconds + 's';
+            }, 1000);
+        }
+    } else {
+        if (_loadingTimer) {
+            clearInterval(_loadingTimer);
+            _loadingTimer = null;
+        }
+    }
+}
+
+// ── Wire up ──────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    initCy();
+
+    document.getElementById('btn-start').addEventListener('click', startSim);
+    document.getElementById('btn-advance').addEventListener('click', advanceStep);
+    document.getElementById('btn-reset').addEventListener('click', resetSim);
+
+    document.getElementById('toggle-llm').addEventListener('change', function() {
+        document.getElementById('llm-label').textContent = this.checked ? 'LLM MODE' : 'HEURISTIC MODE';
+    });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    background: #f7f7f7;
+    color: #222;
+}
+
+header {
+    background: #1f2937;
+    color: white;
+    padding: 20px;
+}
+
+header h1 {
+    margin: 0 0 6px 0;
+}
+
+.controls {
+    background: white;
+    padding: 16px 20px;
+    border-bottom: 1px solid #ddd;
+}
+
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px;
+    align-items: start;
+    width: 100%;
+}
+
+.panel {
+    background: white;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+}
+
+.panel h2 {
+    margin-top: 0;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: #f0f0f0;
+    padding: 12px;
+    border-radius: 8px;
+    max-height: 460px;
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+.card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: #fafafa;
+}
+
+.metrics p,
+.card p {
+    margin: 6px 0;
+}
+
+.graph-panel {
+    min-width: 0;
+    width: 100%;
+}
+
+#graph {
+    width: 100%;
+    height: 420px;
+    max-width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: white;
+    overflow: hidden;
+    display: block;
+}
+
+/* extra guard in case Cytoscape injects canvases wider than container */
+#graph canvas,
+#graph > div {
+    max-width: 100% !important;
+}
+
+@media (max-width: 1000px) {
+    .layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.controls form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.controls label {
+    font-weight: bold;
+}
+
+.controls select,
+.controls button {
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+}
+
+.controls button {
+    background: #1f2937;
+    color: white;
+    cursor: pointer;
+}
+
+.controls button:hover {
+    opacity: 0.92;
+}
+
+.history-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    background: #fafafa;
+}
+
+.history-card h3 {
+    margin-top: 0;
+}
+
+.history-card ul {
+    margin-top: 6px;
+}
