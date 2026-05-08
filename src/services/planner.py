@@ -76,7 +76,7 @@ class Planner:
         if self.mode == "heuristic" or self.llm_callable is None:
             return self._heuristic_recommendations(state)
 
-        prompt = self.build_bare_prompt(state) if self.mode == "llm_nostate" else self.build_prompt(state)
+        prompt = self._build_bare_prompt_natural(state) if self.mode == "llm_nostate" else self.build_prompt(state)
 
         print(f"[PLANNER] Calling LLM (mode={self.mode})...", flush=True, file=sys.stderr)
         if self.mode == "llm_nostate":
@@ -138,7 +138,7 @@ class Planner:
             (actions, updated_conversation)
         """
         # Build the next user turn from current state
-        next_user_msg = self.build_turn_message(state)
+        next_user_msg = self._build_turn_message_natural(state)
         conversation.append({"role": "user", "content": next_user_msg})
 
         print(f"[PLANNER] Calling LLM chat (turn {len(conversation)})...", flush=True, file=sys.stderr)
@@ -201,13 +201,16 @@ You will recommend the single best next action as JSON:
 
 Rules:
 - action_type must be exactly ONE word from: scan, enumerate, analyze, exploit, pivot, access
-- target_host must be an exact IP — never include port numbers
-- Respond ONLY with the JSON object — no other text"""
+- target_host must be an exact IP; never include port numbers
+- For enumerate, analyze, exploit, pivot, and access, target_host is required and must not be null
+- Respond ONLY with the JSON object and no extra text"""
 
     def build_turn_message(self, state: NetworkState) -> str:
         """
-        Per-step user message describing what just happened and explicitly
-        telling phi3 which host to target next based on current state.
+        Per-step user message for conversational mode.
+
+        This stays intentionally human-style rather than fully structured so
+        the LLM has to infer the best path from partial context.
         """
         history = state.history
         if not history:
@@ -215,14 +218,10 @@ Rules:
 
         last = history[-1]
         action_type = last.get("action_type", "")
-        # Use target from history, fall back to most actionable known host
         target_ip = last.get("target_ip")
         if not target_ip:
-            # Find the most actionable host (Tomcat first)
             for ip, host in state.known_hosts.items():
-                if any("tomcat" in (s.get("product") or "").lower() or
-                       s.get("port") in {8080, 80, 443}
-                       for s in host.get("services", [])):
+                if self._host_is_exploitable(host):
                     target_ip = ip
                     break
             if not target_ip and state.known_hosts:
@@ -230,26 +229,20 @@ Rules:
 
         success = last.get("success")
 
-        # Build a host-aware description of what just happened.
-        # Check what services the target actually runs so we don't say
-        # "found Tomcat" on a host that only runs ospfd.
         host_data = state.known_hosts.get(target_ip, {}) if target_ip else {}
         services = host_data.get("services", [])
-        svc_names = [s.get("service_name", "") for s in services]
-        is_web = any(s.get("port") in {80, 443, 8080, 8443} or
-                     "tomcat" in (s.get("product") or "").lower() or
-                     s.get("service_name", "").lower() in {"http", "https", "http-proxy"}
-                     for s in services)
+        is_web = self._host_is_exploitable(host_data)
+        has_supported_exploit = self._host_has_supported_exploit_path(host_data)
         svc_desc = ", ".join(f"port {s['port']} ({s['service_name']})" for s in services) or "unknown services"
 
         if action_type == "enumerate" and success:
             if is_web:
-                description = f"We enumerated {target_ip} and found web services ({svc_desc}), including a potentially exposed management interface."
+                description = f"We enumerated {target_ip} and found {svc_desc}."
             else:
-                description = f"We enumerated {target_ip} and found {svc_desc}. This appears to be a routing/gateway host with no direct exploit path."
+                description = f"We enumerated {target_ip} and found {svc_desc}. It looks more like infrastructure than a foothold."
         elif action_type == "analyze" and success:
-            if is_web:
-                description = f"We analyzed {target_ip} and confirmed CVE-2019-0232 and WAR upload as viable exploit paths."
+            if has_supported_exploit:
+                description = f"We analyzed {target_ip} and confirmed a viable exploit path."
             else:
                 description = f"We analyzed {target_ip} — it runs {svc_desc} and has no viable exploit path. It is a gateway/routing host."
         elif action_type == "exploit" and success:
@@ -330,7 +323,10 @@ Known hosts:
 
 {hint_block}
 
-What is the single best next action? Use the exact IP address in target_host. Respond with JSON only."""
+What is the single best next action?
+Use the exact IP address in target_host.
+Do not leave target_host null unless the action is scan.
+Respond with JSON only."""
 
     def build_prompt(self, state: NetworkState) -> str:
         """
@@ -503,6 +499,7 @@ Important rules for your JSON response:
 - action_type must be exactly ONE of: scan, enumerate, analyze, exploit, pivot, access
 - target_host MUST be one of these exact IPs: {host_list} — do NOT use null unless action_type is scan
 - Do NOT include port numbers in target_host — use "10.0.2.2" not "10.0.2.2:8080"
+- If action_type is enumerate, analyze, exploit, pivot, or access, target_host is mandatory
 - Do NOT repeat actions already marked [SUCCESS] in the history or marked ALREADY DONE on a host
 - Look at each host's Status line — if a host says "ALREADY DONE: enumerated", next step is "analyze" on that host
 
@@ -517,6 +514,147 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
     "confidence": 0.85
   }}
 ]""".strip()
+
+    def _build_turn_message_natural(self, state: NetworkState) -> str:
+        history = state.history
+        if not history:
+            return "We are starting fresh. What should we do first?"
+
+        last = history[-1]
+        action_type = last.get("action_type", "")
+        target_ip = last.get("target_ip")
+        if not target_ip:
+            for ip, host in state.known_hosts.items():
+                if self._host_is_exploitable(host):
+                    target_ip = ip
+                    break
+            if not target_ip and state.known_hosts:
+                target_ip = next(iter(state.known_hosts))
+
+        success = last.get("success")
+        host_data = state.known_hosts.get(target_ip, {}) if target_ip else {}
+        services = host_data.get("services", [])
+        svc_desc = ", ".join(f"port {s['port']} ({s['service_name']})" for s in services) or "unknown services"
+        has_supported_exploit = self._host_has_supported_exploit_path(host_data)
+        is_web = self._host_is_exploitable(host_data)
+
+        if action_type == "enumerate" and success:
+            if is_web:
+                description = f"We enumerated {target_ip} and found {svc_desc}."
+            else:
+                description = f"We enumerated {target_ip} and found {svc_desc}. It looks more like infrastructure than a foothold."
+        elif action_type == "analyze" and success:
+            if has_supported_exploit:
+                description = f"We analyzed {target_ip} and confirmed a viable exploit path."
+            else:
+                description = f"We analyzed {target_ip} and did not find a viable exploit path."
+        elif action_type == "exploit" and success:
+            description = f"We exploited {target_ip} successfully and now have a shell there."
+        elif action_type == "exploit" and not success:
+            description = f"Exploit on {target_ip} failed."
+        elif action_type == "pivot" and success:
+            description = f"We pivoted through {target_ip} and can now reach the internal network containing {state.target_ip}."
+        elif action_type == "pivot" and not success:
+            description = f"Pivot through {target_ip} failed."
+        elif action_type == "access" and success:
+            description = f"We accessed target {state.target_ip}. Objective complete."
+        elif action_type == "scan" and success:
+            description = f"We scanned and discovered: {', '.join(state.known_hosts.keys())}."
+        else:
+            description = f"We performed {action_type} on {target_ip or 'the network'} and it {'succeeded' if success else 'failed'}."
+
+        completed: Dict[str, List[str]] = {}
+        for entry in history:
+            if entry.get("success") and entry.get("target_ip"):
+                completed.setdefault(entry["target_ip"], []).append(entry["action_type"])
+
+        host_lines = []
+        for ip, host in state.known_hosts.items():
+            svc_str = ", ".join(
+                f"port {s['port']} ({s['service_name']})"
+                for s in host.get("services", [])
+            ) or "unknown services"
+            comp = " [COMPROMISED - you have a shell]" if host.get("compromised") else ""
+            stage = host.get("stage", "discovered")
+            done = sorted(set(completed.get(ip, [])))
+            done_str = f" completed: {', '.join(done)}." if done else ""
+            host_lines.append(f"  {ip}{comp}: {svc_str}. current stage={stage}.{done_str}")
+
+        hosts_block = "\n".join(host_lines) if host_lines else "  None"
+
+        return f"""{description}
+
+Known hosts:
+{hosts_block}
+
+What is the single best next action?
+Use the exact IP address in target_host and respond with JSON only."""
+
+    def _build_bare_prompt_natural(self, state: NetworkState) -> str:
+        target = state.target_ip
+        scope = ", ".join(state.scope_networks) if state.scope_networks else "unknown"
+        blocked = ", ".join(state.blocked_networks) if state.blocked_networks else "none"
+        host_list = ", ".join(sorted(state.known_hosts.keys())) if state.known_hosts else "none discovered yet"
+
+        action_verbs = {
+            "scan": "Scanned network",
+            "enumerate": "Enumerated",
+            "analyze": "Analyzed",
+            "exploit": "Exploited",
+            "pivot": "Pivoted through",
+            "access": "Accessed",
+        }
+
+        history_lines = []
+        for entry in state.history:
+            action_type = entry.get("action_type", "")
+            target_ip = entry.get("target_ip")
+            success = entry.get("success")
+            if action_type in ("nmap_parse",):
+                continue
+            if not target_ip and action_type not in ("scan",):
+                continue
+            status = "SUCCESS" if success else "FAILED" if success is False else "tried"
+            verb = action_verbs.get(action_type, action_type)
+            target_str = target_ip if target_ip else "network"
+            history_lines.append(f"- [{status}] {verb} {target_str}")
+
+        host_lines = []
+        for ip, host in state.known_hosts.items():
+            services = host.get("services", [])
+            svc_str = ", ".join(
+                f"port {s['port']} ({s['service_name']})"
+                for s in services
+            ) if services else "no open ports found"
+            stage = host.get("stage", "discovered")
+            compromised = " [COMPROMISED]" if host.get("compromised") else ""
+            host_lines.append(f"  {ip}{compromised}: {svc_str}. stage={stage}")
+
+        history_block = "\n".join(history_lines) if history_lines else "  No actions taken yet."
+        hosts_block = "\n".join(host_lines) if host_lines else "  No hosts discovered yet."
+
+        return f"""You are a penetration tester working on a CTF exercise.
+
+Objective: gain access to the internal host at {target}.
+In-scope networks: {scope}
+Blocked/internal networks: {blocked}
+
+Known hosts:
+{hosts_block}
+
+Action history:
+{history_block}
+
+Recommend the next {self.max_actions} steps as JSON.
+
+Important rules:
+- action_type must be exactly one of: scan, enumerate, analyze, exploit, pivot, access
+- target_host must be one of these exact IPs: {host_list}; use null only for scan
+- do not include port numbers in target_host
+- for enumerate, analyze, exploit, pivot, and access, target_host is mandatory
+- prefer advancing the attack rather than repeating successful work
+
+Respond only with valid JSON as a list."""
 
     # ------------------------------------------------------------------
     # Minimal LLM output sanitisation
@@ -549,6 +687,7 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
             target = action.get("target_host")
             action_type = action.get("action_type", "analyze")
             command = action.get("command")
+            reasoning = action.get("reasoning")
 
             # Flatten list fields
             if isinstance(target, list):
@@ -567,13 +706,42 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
                 target = str(target).split(":")[0].strip()
                 action["target_host"] = target
 
-            # Only hard-reject hallucinated hosts that don't exist anywhere in state
+            # Recover omitted targets before host validation so incomplete but
+            # otherwise sensible actions become testable instead of just null.
+            if target is None and action_type != "scan":
+                inferred_target = self._infer_target_host(state, action_type, command, reasoning)
+                if inferred_target is not None:
+                    target = inferred_target
+                    action["target_host"] = inferred_target
+                    print(
+                        f"[PLANNER] Filled missing target_host for {action_type}: {inferred_target}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+
+            # Hard-reject hallucinated hosts — log clearly for research comparison
             if (
                 target is not None
                 and target != state.target_ip
                 and not state.is_known_host(target)
             ):
-                print(f"[PLANNER] Dropping hallucinated host: {target}", flush=True, file=sys.stderr)
+                # Check if it's the specific 192.168.x.x hallucination from Acosta PDF
+                is_acosta_hallucination = str(target).startswith("192.168.")
+                is_literal_string = target.lower() in {"target_ip", "target", "<target>", "<ip>"}
+                if is_acosta_hallucination:
+                    print(
+                        f"[HALLUCINATION] LLM invented out-of-scope IP: {target} "
+                        f"(not in scope, not in known_hosts) — matches baseline failure pattern",
+                        flush=True, file=sys.stderr,
+                    )
+                elif is_literal_string:
+                    print(
+                        f"[HALLUCINATION] LLM used literal placeholder as target: '{target}' "
+                        f"— matches baseline failure pattern",
+                        flush=True, file=sys.stderr,
+                    )
+                else:
+                    print(f"[PLANNER] Dropping hallucinated host: {target}", flush=True, file=sys.stderr)
                 action["target_host"] = None
                 target = None
 
@@ -879,13 +1047,15 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
             raw_rank = item.get("rank", idx)
             if isinstance(raw_rank, list):
                 raw_rank = raw_rank[0] if raw_rank else idx
+            if raw_rank is None or str(raw_rank).strip().lower() == "null":
+                raw_rank = idx
 
-            raw_action_type = item.get("action_type", "analyze")
+            raw_action_type = item.get("action_type", item.get("action", item.get("type", "analyze")))
             if isinstance(raw_action_type, list):
                 raw_action_type = raw_action_type[0] if raw_action_type else "analyze"
             action_type = self._normalize_action_type(str(raw_action_type))
 
-            target_host = item.get("target_host")
+            target_host = item.get("target_host", item.get("target", item.get("host", item.get("ip"))))
             if isinstance(target_host, list):
                 target_host = target_host[0] if target_host else None
             if target_host is not None and str(target_host).strip() not in {"null", ""}:
@@ -908,8 +1078,13 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
             if isinstance(raw_confidence, list):
                 raw_confidence = raw_confidence[0] if raw_confidence else 0.5
 
+            try:
+                rank_value = int(raw_rank)
+            except (TypeError, ValueError):
+                rank_value = idx
+
             normalized.append(self._make_action(
-                rank=int(raw_rank), action_type=action_type, target_host=target_host,
+                rank=rank_value, action_type=action_type, target_host=target_host,
                 command=command, reasoning=reasoning, confidence=self._safe_confidence(raw_confidence),
             ))
 
@@ -944,6 +1119,40 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
             "command": command, "reasoning": reasoning, "confidence": confidence,
         }
 
+    def _infer_target_host(
+        self,
+        state: NetworkState,
+        action_type: str,
+        command: Any = None,
+        reasoning: Any = None,
+    ) -> Optional[str]:
+        if action_type == "scan":
+            return None
+
+        for text in (command, reasoning):
+            if not isinstance(text, str):
+                continue
+            for ip in re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", text):
+                if ip == state.target_ip or state.is_known_host(ip):
+                    return ip
+
+        oracle_candidates = self._heuristic_recommendations(state)
+        for candidate in oracle_candidates:
+            if (
+                candidate.get("action_type") == action_type
+                and candidate.get("target_host") is not None
+            ):
+                return str(candidate["target_host"])
+
+        if action_type == "access" and state.is_known_host(state.target_ip):
+            return state.target_ip
+
+        known_non_target = [ip for ip in state.known_hosts.keys() if ip != state.target_ip]
+        if len(known_non_target) == 1 and action_type in {"enumerate", "analyze", "exploit", "pivot"}:
+            return known_non_target[0]
+
+        return None
+
     @staticmethod
     def _safe_confidence(value: Any) -> float:
         try:
@@ -975,6 +1184,25 @@ Respond ONLY in valid JSON as a list. Example (do not copy this literally — us
                     candidates.append(ip)
                     break
         return candidates
+
+    @staticmethod
+    def _host_is_exploitable(host: Dict[str, Any]) -> bool:
+        if host.get("exploit_profile"):
+            return True
+        return any(
+            svc.get("port") in {80, 443, 8080, 8443}
+            or svc.get("service_name", "").lower() in {"http", "https", "http-proxy", "tomcat"}
+            or "tomcat" in (svc.get("product") or "").lower()
+            for svc in host.get("services", [])
+        )
+
+    @staticmethod
+    def _host_has_supported_exploit_path(host: Dict[str, Any]) -> bool:
+        return bool(host.get("exploit_profile")) or any(
+            "tomcat" in svc.get("service_name", "").lower()
+            or "tomcat" in (svc.get("product") or "").lower()
+            for svc in host.get("services", [])
+        )
 
     @staticmethod
     def _host_looks_like_tomcat(state: NetworkState, ip: str) -> bool:

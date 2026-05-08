@@ -54,6 +54,40 @@ class PlannerEvaluation:
     def __init__(self, max_actions: int = 3) -> None:
         self.max_actions = max_actions
 
+    def _add_host(
+        self,
+        state: NetworkState,
+        ip: str,
+        *,
+        services: List[Dict[str, Any]],
+        notes: Optional[List[str]] = None,
+        exploit_profile: Optional[str] = None,
+        pivot_capable: bool = False,
+        gateway_candidate: bool = False,
+    ) -> None:
+        state.add_host(ip)
+        for service in services:
+            state.add_service(
+                ip=ip,
+                port=service["port"],
+                protocol=service.get("protocol", "tcp"),
+                service_name=service["service_name"],
+                state=service.get("state", "open"),
+                product=service.get("product"),
+                version=service.get("version"),
+            )
+
+        host = state.known_hosts[ip]
+        host["exploit_profile"] = exploit_profile
+        host["pivot_capable"] = pivot_capable
+        if notes:
+            for note in notes:
+                state.add_host_note(ip, note)
+        if pivot_capable:
+            state.mark_pivot_candidate(ip, "Foothold candidate for internal pivoting")
+        if gateway_candidate:
+            state.mark_gateway_candidate(ip, "Gateway/routing host")
+
     # ------------------------------------------------------------------
     # Scenario builders
     # ------------------------------------------------------------------
@@ -80,11 +114,30 @@ class PlannerEvaluation:
         Scenario 1:
         No hosts known yet. Tests whether the planner starts with reconnaissance.
         """
-        return NetworkState(
+        state = NetworkState(
             target_ip="10.0.4.3",
             scope_networks=["10.0.0.0/24", "10.0.2.0/24", "10.0.4.0/24"],
             blocked_networks=["10.0.4.0/24"],
         )
+        state.metadata["initial_scan_hosts"] = [
+            {
+                "ip": "10.0.0.1",
+                "services": [{"port": 2601, "service_name": "ospfd"}],
+                "notes": ["Discovered via initial subnet scan"],
+                "gateway_candidate": True,
+            },
+            {
+                "ip": "10.0.2.2",
+                "services": [{"port": 8080, "service_name": "http-proxy", "product": "Apache Tomcat", "version": "9.0"}],
+                "notes": [
+                    "Discovered via initial subnet scan",
+                    "Web-facing service - strong candidate for enumeration",
+                ],
+                "exploit_profile": "tomcat_mgr_upload",
+                "pivot_capable": True,
+            },
+        ]
+        return state
 
     def build_tomcat_foothold_state(self) -> NetworkState:
         """
@@ -110,6 +163,126 @@ PORT     STATE SERVICE VERSION
             blocked_networks=["10.0.4.0/24"],
         )
 
+    def build_multi_branch_dmz_state(self) -> NetworkState:
+        """
+        Scenario 5:
+        Several external hosts are already known. Only one is a real foothold.
+        This pressures the conversational modes to keep target identity straight.
+        """
+        state = NetworkState(
+            target_ip="10.0.4.3",
+            scope_networks=["10.0.0.0/24", "10.0.2.0/24", "10.0.4.0/24"],
+            blocked_networks=["10.0.4.0/24"],
+        )
+
+        self._add_host(
+            state,
+            "10.0.0.1",
+            services=[{"port": 2601, "service_name": "ospfd"}],
+            notes=["Routing host discovered on the DMZ edge"],
+            gateway_candidate=True,
+        )
+        self._add_host(
+            state,
+            "10.0.2.2",
+            services=[{"port": 8080, "service_name": "http-proxy", "product": "Apache Tomcat", "version": "9.0"}],
+            notes=["Tomcat manager is likely exposed here", "This is the only host with a pivot path to the internal subnet"],
+            exploit_profile="tomcat_mgr_upload",
+            pivot_capable=True,
+        )
+        self._add_host(
+            state,
+            "10.0.2.5",
+            services=[{"port": 80, "service_name": "http", "product": "Apache httpd", "version": "2.4.41"}],
+            notes=["Public web server present, but no working exploit path is known in this exercise"],
+            exploit_profile=None,
+        )
+        self._add_host(
+            state,
+            "10.0.2.9",
+            services=[{"port": 22, "service_name": "ssh", "product": "OpenSSH", "version": "8.2"}],
+            notes=["Management host with SSH only - useful context, but not the foothold"],
+            exploit_profile=None,
+        )
+        state.add_global_note(
+            "Multi-branch DMZ scenario: multiple plausible-looking hosts exist, but only 10.0.2.2 supports the full exploit -> pivot -> access chain."
+        )
+        return state
+
+    def build_stale_history_pressure_state(self) -> NetworkState:
+        """
+        Scenario 6:
+        The history is intentionally noisy. One host is a completed dead end while
+        the true foothold is only partially progressed. This is designed to expose
+        repetition and stale-memory mistakes in conversational mode.
+        """
+        state = self.build_multi_branch_dmz_state()
+
+        state.advance_host_stage("10.0.2.5", "enumerated")
+        state.record_action(
+            action_type="enumerate",
+            description="Enumerated 10.0.2.5 and found only a basic public web site.",
+            target_ip="10.0.2.5",
+            success=True,
+        )
+        state.record_action(
+            action_type="analyze",
+            description="Analyzed 10.0.2.5 and found no useful exploit path.",
+            target_ip="10.0.2.5",
+            success=True,
+        )
+        state.add_host_note("10.0.2.5", "Analysis completed earlier - this host is a dead end.")
+
+        state.advance_host_stage("10.0.2.2", "enumerated")
+        state.record_action(
+            action_type="enumerate",
+            description="Enumerated 10.0.2.2 and confirmed Apache Tomcat on port 8080.",
+            target_ip="10.0.2.2",
+            success=True,
+        )
+        state.add_global_note(
+            "Stale-history scenario: the planner must ignore the already-analyzed dead-end web host and continue progressing the Tomcat foothold."
+        )
+        return state
+
+    def build_post_exploit_distraction_state(self) -> NetworkState:
+        """
+        Scenario 7:
+        The foothold is already compromised, but multiple known hosts remain in
+        memory. The correct move is to pivot, not to revisit enumeration/analyze.
+        """
+        state = self.build_multi_branch_dmz_state()
+        state.advance_host_stage("10.0.2.2", "analyzed")
+        state.mark_compromised("10.0.2.2")
+        state.record_action(
+            action_type="enumerate",
+            description="Enumerated 10.0.2.2 and found exposed Tomcat manager.",
+            target_ip="10.0.2.2",
+            success=True,
+        )
+        state.record_action(
+            action_type="analyze",
+            description="Confirmed WAR upload on 10.0.2.2 as the viable exploit path.",
+            target_ip="10.0.2.2",
+            success=True,
+        )
+        state.record_action(
+            action_type="exploit",
+            description="Compromised 10.0.2.2 and obtained a shell.",
+            target_ip="10.0.2.2",
+            success=True,
+        )
+        state.record_action(
+            action_type="enumerate",
+            description="Enumerated 10.0.2.9 and found SSH only.",
+            target_ip="10.0.2.9",
+            success=True,
+        )
+        state.add_global_note(
+            "Post-exploit distraction scenario: a shell already exists on 10.0.2.2, so the next valid step is pivot into the blocked subnet."
+        )
+        return state
+
     def build_compromised_pivot_state(self) -> NetworkState:
         """
         Scenario 3:
@@ -126,11 +299,43 @@ PORT     STATE SERVICE VERSION
         )
         return state
 
+    def build_baseline_state(self) -> NetworkState:
+        """
+        Scenario 4 — Baseline:
+        Replicates the exact scenario from the research's Kali MCP research system.
+
+        The professor's system used a real Kali box with actual tool execution
+        and qwen2.5:32b. Despite real tool output, the LLM:
+          - Hallucinated 192.168.1.10 (out-of-scope IP not in any scan result)
+          - Tried to scan "TARGET_IP" as a literal string
+          - Got stuck on 10.0.0.1 (Quagga routing) instead of moving to Tomcat
+          - Lost track of which host was the foothold candidate
+
+        Starts completely empty — no known hosts, single external subnet 10.0.0.0/24.
+        Use this to demonstrate that structured state tracking prevents the specific
+        hallucinations observed in the professor's system.
+        """
+        state = NetworkState(
+            target_ip="10.0.4.3",
+            scope_networks=["10.0.0.0/24"],
+            blocked_networks=["10.0.4.0/24"],
+        )
+        state.add_global_note(
+            "Baseline scenario: replicates the Kali MCP research system. "
+            "Watch for hallucinated IPs (192.168.1.x), literal TARGET_IP strings, "
+            "and failure to advance from gateway host to Tomcat foothold."
+        )
+        return state
+
     def build_all_scenarios(self) -> Dict[str, NetworkState]:
         return {
             "initial_recon": self.build_initial_recon_state(),
             "tomcat_foothold": self.build_tomcat_foothold_state(),
             "compromised_pivot": self.build_compromised_pivot_state(),
+            "baseline": self.build_baseline_state(),
+            "multi_branch_dmz": self.build_multi_branch_dmz_state(),
+            "stale_history_pressure": self.build_stale_history_pressure_state(),
+            "post_exploit_distraction": self.build_post_exploit_distraction_state(),
         }
 
     # ------------------------------------------------------------------

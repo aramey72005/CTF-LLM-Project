@@ -31,6 +31,7 @@ class NetworkState:
     gateway_candidates: List[str] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._validate_ip(self.target_ip)
@@ -279,6 +280,7 @@ class NetworkState:
             "gateway_candidates": self.gateway_candidates,
             "history": self.history,
             "notes": self.notes,
+            "metadata": self.metadata,
         }
 
     def summarize_hosts(self) -> List[str]:

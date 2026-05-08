@@ -591,7 +591,11 @@
         <select id="sel-scenario">
             <option value="initial_recon">Initial Recon</option>
             <option value="tomcat_foothold" selected>Tomcat Foothold</option>
+            <option value="multi_branch_dmz">Multi-Branch DMZ</option>
+            <option value="stale_history_pressure">Stale History Pressure</option>
+            <option value="post_exploit_distraction">Post-Exploit Distraction</option>
             <option value="compromised_pivot">Compromised Pivot</option>
+            <option value="baseline">Baseline ★</option>
         </select>
     </div>
     <div class="ctrl-group">
@@ -600,10 +604,12 @@
             <option value="heuristic">Heuristic (oracle)</option>
             <option value="llm">LLM + Structured State</option>
             <option value="llm_nostate">LLM + Conversational State</option>
+            <option value="compare">Compare: Structured vs Conversational</option>
         </select>
     </div>
     <button class="btn btn-primary" id="btn-start">▶ START SIM</button>
     <button class="btn btn-ghost" id="btn-reset" disabled>↺ RESET</button>
+    <button class="btn btn-ghost" id="btn-report" disabled>↓ DOWNLOAD REPORT</button>
 
     <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
         <button class="btn btn-success" id="btn-advance" disabled>APPLY &amp; NEXT STEP →</button>
@@ -698,6 +704,7 @@ let simState = {
     step: 0,
     maxSteps: 6,
     done: false,
+    compare: false,
     selectedAction: null,
     currentActions: [],
     mode: 'heuristic',
@@ -817,6 +824,112 @@ function badgeClass(type) {
     const map = { scan: 'badge-scan', enumerate: 'badge-enumerate', exploit: 'badge-exploit',
                   pivot: 'badge-pivot', analyze: 'badge-analyze', access: 'badge-access' };
     return map[type] || 'badge-scan';
+}
+
+function renderCompareState(branches) {
+    const body = document.getElementById('state-body');
+    const left = branches.llm;
+    const right = branches.llm_nostate;
+    const leftText = left.state_text
+        .replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d+)?)/g, '<span class="hl-ip">$1</span>');
+    const rightText = right.state_text
+        .replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\/\d+)?)/g, '<span class="hl-ip">$1</span>');
+    body.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+                <div style="font-family:var(--mono);font-size:11px;color:#a78bfa;margin-bottom:6px;">STRUCTURED STATE</div>
+                <pre class="state-pre">${leftText}</pre>
+            </div>
+            <div>
+                <div style="font-family:var(--mono);font-size:11px;color:#ffb300;margin-bottom:6px;">CONVERSATIONAL STATE</div>
+                <pre class="state-pre">${rightText}</pre>
+            </div>
+        </div>`;
+}
+
+function renderCompareActions(branches) {
+    const body = document.getElementById('actions-body');
+    const renderBranch = (branch, label, color) => {
+        const actions = branch.actions || [];
+        const cards = actions.map(action => {
+            const pct = Math.round(action.confidence * 100);
+            return `
+                <div class="action-card" style="cursor:default">
+                    <div class="action-rank">#${action.rank}</div>
+                    <div class="action-meta">
+                        <span class="badge ${badgeClass(action.action_type)}">${action.action_type}</span>
+                    </div>
+                    <div class="confidence-bar"><div class="confidence-fill" style="width:${pct}%"></div></div>
+                    <div class="action-field"><span class="k">target</span><span class="v ip">${action.target_host || 'N/A'}</span></div>
+                    <div class="action-field"><span class="k">command</span><span class="v cmd">${action.command || '—'}</span></div>
+                </div>`;
+        }).join('');
+        return `
+            <div>
+                <div style="font-family:var(--mono);font-size:11px;color:${color};margin-bottom:6px;">${label}</div>
+                ${cards || '<div class="empty-state"><div>No actions available</div></div>'}
+            </div>`;
+    };
+
+    if (simState.done) {
+        body.innerHTML = '<div class="done-banner">✓ COMPARISON COMPLETE</div>';
+        document.getElementById('btn-advance').disabled = true;
+        return;
+    }
+
+    body.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            ${renderBranch(branches.llm, 'STRUCTURED LLM', '#a78bfa')}
+            ${renderBranch(branches.llm_nostate, 'CONVERSATIONAL LLM', '#ffb300')}
+        </div>`;
+    document.getElementById('btn-advance').disabled = false;
+}
+
+function renderCompareResult(branches) {
+    const body = document.getElementById('result-body');
+    const renderBranchResult = (branch, label, color) => {
+        const result = branch.action_result;
+        const chosen = branch.chosen_action;
+        const analysis = branch.analysis || {};
+        if (!result || !chosen) {
+            return `<div><div style="font-family:var(--mono);font-size:11px;color:${color};margin-bottom:6px;">${label}</div><div class="empty-state"><div>No step applied yet</div></div></div>`;
+        }
+        const cls = result.success ? 'success' : 'fail';
+        const flags = (analysis.flags || []).join(', ') || 'none';
+        return `
+            <div>
+                <div style="font-family:var(--mono);font-size:11px;color:${color};margin-bottom:6px;">${label}</div>
+                <div class="result-box ${cls}">
+                    <div class="result-summary">${result.summary}</div>
+                    <div style="margin-top:6px;color:var(--text)">action: ${chosen.action_type} → ${chosen.target_host || 'network'}</div>
+                    <div style="margin-top:4px;color:var(--text-dim)">flags: ${flags}</div>
+                </div>
+            </div>`;
+    };
+    body.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            ${renderBranchResult(branches.llm, 'STRUCTURED LLM', '#a78bfa')}
+            ${renderBranchResult(branches.llm_nostate, 'CONVERSATIONAL LLM', '#ffb300')}
+        </div>`;
+}
+
+function appendCompareTimeline(step, branches) {
+    const body = document.getElementById('timeline-body');
+    const empty = body.querySelector('.empty-state');
+    if (empty) empty.remove();
+    const llm = branches.llm;
+    const nostate = branches.llm_nostate;
+    const el = document.createElement('div');
+    el.className = 'timeline-entry';
+    const leftFlags = (llm.analysis?.flags || []).join(', ') || 'none';
+    const rightFlags = (nostate.analysis?.flags || []).join(', ') || 'none';
+    el.innerHTML = `
+        <div class="tl-label"><span class="tl-step">STEP ${step}</span><span style="margin-left:8px;color:#a78bfa">COMPARE</span></div>
+        <div class="tl-chosen">Structured: ${llm.chosen_action?.action_type || '?'} → ${llm.chosen_action?.target_host || 'network'}</div>
+        <div class="tl-result ${llm.action_result?.success ? 'ok' : 'bad'}">flags: ${leftFlags}</div>
+        <div class="tl-chosen" style="margin-top:6px;">Conversational: ${nostate.chosen_action?.action_type || '?'} → ${nostate.chosen_action?.target_host || 'network'}</div>
+        <div class="tl-result ${nostate.action_result?.success ? 'ok' : 'bad'}">flags: ${rightFlags}</div>`;
+    body.prepend(el);
 }
 
 function renderActions(actions) {
@@ -995,6 +1108,11 @@ function showToast(msg, type = '') {
     setTimeout(() => { t.className = ''; }, 3000);
 }
 
+function downloadReport() {
+    if (!simState.running) return;
+    window.open('/api/report.pdf', '_blank');
+}
+
 // ── API calls ────────────────────────────────────────────
 async function startSim() {
     const scenario = document.getElementById('sel-scenario').value;
@@ -1013,28 +1131,38 @@ async function startSim() {
         simState.running = true;
         simState.step = 0;
         simState.done = false;
+        simState.compare = !!data.compare;
         simState.mode = mode;
         simState.maxSteps = data.max_steps;
 
-        renderStateText(data.state_text);
-        updateGraph(data.graph);
-        renderActions(data.actions);
-        renderResult(null, null);
+        if (data.compare) {
+            renderCompareState(data.branches);
+            updateGraph(data.branches.llm.graph);
+            renderCompareActions(data.branches);
+            renderCompareResult(data.branches);
+        } else {
+            renderStateText(data.state_text);
+            updateGraph(data.graph);
+            renderActions(data.actions);
+            renderResult(null, null);
+        }
 
         // Clear timeline
         document.getElementById('timeline-body').innerHTML = '';
-        appendTimeline({ step: 0, chosen_action: null, result: null });
+        appendTimeline({ step: 0, chosen_action: null, result: null, mode: simState.mode });
 
         updateProgress(0, data.max_steps);
 
         document.getElementById('btn-reset').disabled = false;
+        document.getElementById('btn-report').disabled = false;
         document.getElementById('btn-start').textContent = '▶ RESTART';
 
         // Update mode indicator in panel header
         const modeEl = document.getElementById('mode-indicator');
         if (modeEl) {
             const modeLabels = { heuristic: 'HEURISTIC', llm: 'LLM + STRUCTURED STATE', llm_nostate: 'LLM + CONV. STATE' };
-            const modeColors = { heuristic: '#4a9eff', llm: '#a78bfa', llm_nostate: '#ffb300' };
+            const modeColors = { heuristic: '#4a9eff', llm: '#a78bfa', llm_nostate: '#ffb300', compare: '#00d4ff' };
+            modeLabels.compare = 'COMPARE MODE';
             modeEl.textContent = modeLabels[mode] || mode;
             modeEl.style.color = modeColors[mode] || '#4a9eff';
             modeEl.style.borderColor = modeColors[mode] || '#4a9eff';
@@ -1053,12 +1181,13 @@ async function advanceStep() {
     if (!simState.running || simState.done) return;
 
     const idx = simState.selectedAction;
-    const action = (idx !== null && simState.currentActions[idx]) ? simState.currentActions[idx] : null;
+    const action = simState.compare ? null : ((idx !== null && simState.currentActions[idx]) ? simState.currentActions[idx] : null);
 
-    // Mark chosen card
-    document.querySelectorAll('.action-card').forEach((c, i) => {
-        if (i === idx) c.classList.add('applied');
-    });
+    if (!simState.compare) {
+        document.querySelectorAll('.action-card').forEach((c, i) => {
+            if (i === idx) c.classList.add('applied');
+        });
+    }
     document.getElementById('btn-advance').disabled = true;
 
     setLoading(true);
@@ -1082,18 +1211,26 @@ async function advanceStep() {
         simState.step = data.step;
         simState.done = data.done;
 
-        renderStateText(data.state_text);
-        updateGraph(data.graph);
-        renderResult(data.action_result, data.chosen_action);
-        renderActions(data.actions);
+        if (data.compare) {
+            renderCompareState(data.branches);
+            updateGraph(data.branches.llm.graph);
+            renderCompareResult(data.branches);
+            renderCompareActions(data.branches);
+            appendCompareTimeline(data.step, data.branches);
+        } else {
+            renderStateText(data.state_text);
+            updateGraph(data.graph);
+            renderResult(data.action_result, data.chosen_action);
+            renderActions(data.actions);
 
-        appendTimeline({
-            step: data.step,
-            chosen_action: data.chosen_action,
-            result: data.action_result,
-            mode: simState.mode !== "heuristic" ? 'llm' : 'heuristic',
-            score: data.score || null,
-        });
+            appendTimeline({
+                step: data.step,
+                chosen_action: data.chosen_action,
+                result: data.action_result,
+                mode: simState.mode !== "heuristic" ? 'llm' : 'heuristic',
+                score: data.score || null,
+            });
+        }
 
         updateProgress(data.step, data.max_steps);
 
@@ -1121,6 +1258,7 @@ function resetSim() {
     simState.running = false;
     simState.step = 0;
     simState.done = false;
+    simState.compare = false;
     simState.selectedAction = null;
     simState.currentActions = [];
 
@@ -1134,6 +1272,7 @@ function resetSim() {
 
     document.getElementById('btn-advance').disabled = true;
     document.getElementById('btn-reset').disabled = true;
+    document.getElementById('btn-report').disabled = true;
     document.getElementById('btn-start').textContent = '▶ START SIM';
 }
 
@@ -1180,6 +1319,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-start').addEventListener('click', startSim);
     document.getElementById('btn-advance').addEventListener('click', advanceStep);
     document.getElementById('btn-reset').addEventListener('click', resetSim);
+    document.getElementById('btn-report').addEventListener('click', downloadReport);
 
     document.getElementById('toggle-llm').addEventListener('change', function() {
         document.getElementById('llm-label').textContent = this.checked ? 'LLM MODE' : 'HEURISTIC MODE';
